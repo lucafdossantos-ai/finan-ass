@@ -3,6 +3,7 @@ import yfinance as yf
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
+from datetime import datetime
 
 # Configuração da página
 st.set_page_config(
@@ -58,10 +59,42 @@ st.markdown("""
         box-shadow: 0 0 15px rgba(0, 230, 118, 0.4);
         transform: translateY(-1px);
     }
+
+    /* Card de Notícias */
+    .news-card {
+        background-color: #161B22;
+        border: 1px solid #30363D;
+        border-radius: 8px;
+        padding: 12px 16px;
+        margin-bottom: 10px;
+    }
+    .news-title {
+        color: #00E676;
+        font-weight: bold;
+        text-decoration: none;
+        font-size: 15px;
+    }
+    .news-publisher {
+        color: #8B949E;
+        font-size: 12px;
+    }
     </style>
 """, unsafe_allow_html=True)
 
-# --- BASE DE DADOS GLOBAL (TOP EMPRESAS POR PAÍS) ---
+# --- SISTEMA DE CACHE PARAN OTIMIZAÇÃO ---
+@st.cache_data(ttl=300, show_spinner=False)
+def buscar_dados_historicos(ticker, periodo, intervalo):
+    return yf.download(ticker, period=periodo, interval=intervalo)
+
+@st.cache_data(ttl=600, show_spinner=False)
+def buscar_info_ticker(ticker):
+    try:
+        t = yf.Ticker(ticker)
+        return t.info, t.news
+    except Exception:
+        return {}, []
+
+# --- BASE DE DADOS GLOBAL ---
 TOP_EMPRESAS_GLOBAIS = {
     "🇧🇷 Brasil (B3)": {
         "VALE3.SA": "Vale S.A.", "PETR4.SA": "Petrobras (PN)", "ITUB4.SA": "Itaú Unibanco",
@@ -83,45 +116,45 @@ TOP_EMPRESAS_GLOBAIS = {
     },
     "🇩🇪 Alemanha (DAX)": {
         "SAP.DE": "SAP SE", "SIE.DE": "Siemens AG", "ALV.DE": "Allianz SE",
-        "AIR.DE": "Airbus SE", "DTE.DE": "Deutsche Telekom", "MBG.DE": "Mercedes-Benz Group",
-        "BMW.DE": "BMW AG", "VOW3.DE": "Volkswagen AG", "BAS.DE": "BASF SE", "DHL.DE": "DHL Group"
+        "AIR.DE": "Airbus SE", "DTE.DE": "Deutsche Telekom", "MBG.DE": "Mercedes-Benz Group"
     },
     "🇬🇧 Reino Unido (FTSE)": {
         "SHEL.L": "Shell plc", "AZN.L": "AstraZeneca plc", "HSBA.L": "HSBC Holdings",
-        "ULVR.L": "Unilever PLC", "BP.L": "BP plc", "GSK.L": "GSK plc",
-        "RIO.L": "Rio Tinto Group", "REL.L": "RELX plc", "BATS.L": "British American Tobacco"
+        "ULVR.L": "Unilever PLC", "BP.L": "BP plc"
     },
     "🇫🇷 França (CAC 40)": {
         "MC.PA": "LVMH Moët Hennessy", "TTE.PA": "TotalEnergies SE", "RMS.PA": "Hermès International",
-        "OR.PA": "L'Oréal S.A.", "SAN.PA": "Sanofi", "AIR.PA": "Airbus SE",
-        "SU.PA": "Schneider Electric", "BNP.PA": "BNP Paribas"
+        "OR.PA": "L'Oréal S.A.", "SAN.PA": "Sanofi"
     },
     "🇯🇵 Japão (Nikkei/TOPIX)": {
-        "7203.T": "Toyota Motor", "6758.T": "Sony Group", "8306.T": "Mitsubishi UFJ Financial",
-        "6861.T": "Keyence Corporation", "9984.T": "SoftBank Group", "6501.T": "Hitachi, Ltd."
+        "7203.T": "Toyota Motor", "6758.T": "Sony Group", "8306.T": "Mitsubishi UFJ Financial"
     },
     "🇨🇳 China / Hong Kong": {
-        "0700.HK": "Tencent Holdings", "9988.HK": "Alibaba Group", "3690.HK": "Meituan",
-        "1398.HK": "ICBC Bank", "0939.HK": "China Construction Bank", "600519.SS": "Kweichow Moutai"
+        "0700.HK": "Tencent Holdings", "9988.HK": "Alibaba Group", "3690.HK": "Meituan"
     }
 }
 
-# Função auxiliar para mapear ticker -> nome
-def obter_nome_empresa(ticker_codigo):
+def obter_nome_empresa(ticker_codigo, info):
     for pais, empresas in TOP_EMPRESAS_GLOBAIS.items():
         if ticker_codigo in empresas:
             return empresas[ticker_codigo]
-    try:
-        info = yf.Ticker(ticker_codigo).info
-        return info.get('longName') or info.get('shortName') or ticker_codigo
-    except Exception:
-        return ticker_codigo
+    return info.get('longName') or info.get('shortName') or ticker_codigo
+
+def formatar_numero(valor):
+    if not valor or pd.isna(valor):
+        return "N/A"
+    if valor >= 1e12:
+        return f"{valor/1e12:.2f}T"
+    if valor >= 1e9:
+        return f"{valor/1e9:.2f}B"
+    if valor >= 1e6:
+        return f"{valor/1e6:.2f}M"
+    return f"{valor:,.2f}"
 
 # --- BARRA LATERAL (SIDEBAR) ---
 st.sidebar.markdown("## ⚡ **FINAN-ASS PRO**")
 st.sidebar.caption("Terminal Analítico de Ativos Globais")
 
-# Seleção de País e Empresa
 st.sidebar.markdown("---")
 st.sidebar.subheader("🌐 Top Empresas Globais")
 
@@ -134,7 +167,6 @@ empresa_preselecionada = st.sidebar.selectbox(
     format_func=lambda x: f"{empresas_do_pais[x]} ({x})"
 )
 
-# Formulário de Pesquisa Manual / Confirmação
 with st.sidebar.form(key="search_form"):
     ticker_input = st.text_input("Ou Digite o Código Manualmente", value=empresa_preselecionada)
     
@@ -149,37 +181,35 @@ with st.sidebar.form(key="search_form"):
     
     btn_buscar = st.form_submit_button("PESQUISAR ATIVO 🔍")
 
-# Tratamento do Ticker
 ticker = ticker_input.strip().upper()
 if not ticker.endswith(".SA") and len(ticker) <= 6 and ticker.endswith(("3", "4", "11")) and not "." in ticker:
     ticker += ".SA"
 
 periodo_sel = periodos[periodo_nome]
 
-# Indicadores Opcionais
 st.sidebar.markdown("---")
 st.sidebar.subheader("Indicadores Técnicos")
 exibir_bollinger = st.sidebar.checkbox("Bandas de Bollinger", value=True)
 exibir_rsi = st.sidebar.checkbox("Exibir RSI / IFR", value=True)
 
-# Busca o Nome da Empresa
-nome_empresa = obter_nome_empresa(ticker)
-
-# --- CABEÇALHO ---
-st.title("⚡ TERMINAL DE ANÁLISE TÉCNICA")
-st.caption(f"Exibindo dados dinâmicos para: **{nome_empresa}** (`{ticker}`)")
-
 # --- PROCESSAMENTO DE DADOS ---
 if ticker:
-    with st.spinner(f"Buscando dados de {nome_empresa}..."):
+    with st.spinner(f"Buscando dados de {ticker}..."):
         intervalo = "15m" if periodo_sel == "1d" else "1d"
-        dados = yf.download(ticker, period=periodo_sel, interval=intervalo)
+        dados = buscar_dados_historicos(ticker, periodo_sel, intervalo)
+        info_ticker, noticias_ticker = buscar_info_ticker(ticker)
         
+        nome_empresa = obter_nome_empresa(ticker, info_ticker)
+
+        # CABEÇALHO
+        st.title("⚡ TERMINAL DE ANÁLISE COMPLETA")
+        st.caption(f"Exibindo dados dinâmicos para: **{nome_empresa}** (`{ticker}`)")
+
         if not dados.empty:
             if isinstance(dados.columns, pd.MultiIndex):
                 dados.columns = dados.columns.get_level_values(0)
 
-            # Cálculo dos Indicadores
+            # Cálculo Técnicos
             dados['MMA20'] = dados['Close'].rolling(window=20).mean()
             dados['MMA50'] = dados['Close'].rolling(window=50).mean()
 
@@ -193,25 +223,39 @@ if ticker:
             rs = gain / loss
             dados['RSI'] = 100 - (100 / (1 + rs))
 
-            # Métricas
+            # Preço e Variação
             preco_atual = dados['Close'].iloc[-1]
             preco_anterior = dados['Close'].iloc[-2] if len(dados) > 1 else preco_atual
             variacao = preco_atual - preco_anterior
             var_percentual = (variacao / preco_anterior) * 100
-            
-            maxima = dados['High'].max()
             minima = dados['Low'].min()
 
-            # Display KPIs
+            # --- BLOCO 1: KPIs DE MERCADO ---
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Empresa / Ativo", nome_empresa, ticker)
             c2.metric("Preço Atual", f"R$ {preco_atual:.2f}" if ticker.endswith(".SA") else f"$ {preco_atual:.2f}", f"{var_percentual:+.2f}%")
-            c3.metric(f"Máxima ({periodo_nome})", f"{preco_atual:.2f}")
+            c3.metric(f"Máxima ({periodo_nome})", f"{dados['High'].max():.2f}")
             c4.metric(f"Mínima ({periodo_nome})", f"{minima:.2f}")
+
+            # --- BLOCO 2: INDICADORES FUNDAMENTALISTAS ---
+            st.markdown("### 📊 Indicadores Fundamentalistas")
+            f1, f2, f3, f4, f5 = st.columns(5)
+            
+            pe_ratio = info_ticker.get('trailingPE')
+            pb_ratio = info_ticker.get('priceToBook')
+            dy = info_ticker.get('dividendYield')
+            market_cap = info_ticker.get('marketCap')
+            roe = info_ticker.get('returnOnEquity')
+
+            f1.metric("P/L (Preço/Lucro)", f"{pe_ratio:.2f}" if pe_ratio else "N/A")
+            f2.metric("P/VP", f"{pb_ratio:.2f}" if pb_ratio else "N/A")
+            f3.metric("Dividend Yield", f"{dy*100:.2f}%" if dy else "N/A")
+            f4.metric("Valor de Mercado", formatar_numero(market_cap))
+            f5.metric("ROE", f"{roe*100:.2f}%" if roe else "N/A")
 
             st.markdown("<br>", unsafe_allow_html=True)
 
-            # Estrutura do Gráfico
+            # --- BLOCO 3: GRÁFICO TÉCNICO ---
             num_rows = 3 if exibir_rsi else 2
             row_heights = [0.6, 0.2, 0.2] if exibir_rsi else [0.75, 0.25]
 
@@ -222,7 +266,6 @@ if ticker:
                 row_heights=row_heights
             )
 
-            # Preço e Médias
             fig.add_trace(go.Candlestick(
                 x=dados.index, open=dados['Open'], high=dados['High'],
                 low=dados['Low'], close=dados['Close'], name="Preço"
@@ -235,19 +278,16 @@ if ticker:
                 fig.add_trace(go.Scatter(x=dados.index, y=dados['Boll_Upper'], line=dict(color='rgba(255,255,255,0.2)', width=1, dash='dot'), name="Boll Sup"), row=1, col=1)
                 fig.add_trace(go.Scatter(x=dados.index, y=dados['Boll_Lower'], line=dict(color='rgba(255,255,255,0.2)', width=1, dash='dot'), fill='tonexty', fillcolor='rgba(255,255,255,0.03)', name="Boll Inf"), row=1, col=1)
 
-            # Volume
             cores_vol = ['#00E676' if c >= o else '#FF5252' for c, o in zip(dados['Close'], dados['Open'])]
             fig.add_trace(go.Bar(x=dados.index, y=dados['Volume'], marker_color=cores_vol, name="Volume"), row=2, col=1)
 
-            # RSI
             if exibir_rsi:
                 fig.add_trace(go.Scatter(x=dados.index, y=dados['RSI'], line=dict(color='#AB47BC', width=1.5), name="RSI (14)"), row=3, col=1)
                 fig.add_hline(y=70, line_dash="dash", line_color="#FF5252", row=3, col=1, opacity=0.5)
                 fig.add_hline(y=30, line_dash="dash", line_color="#00E676", row=3, col=1, opacity=0.5)
 
-            # Estilo Plotly
             fig.update_layout(
-                title=f"Histórico: {nome_empresa} ({ticker})",
+                title=f"Histórico e Indicadores: {nome_empresa} ({ticker})",
                 template="plotly_dark",
                 xaxis_rangeslider_visible=False,
                 height=650,
@@ -259,8 +299,29 @@ if ticker:
 
             st.plotly_chart(fig, use_container_width=True)
 
-            # Tabela
-            with st.expander("🔍 Detalhes dos Dados Históricos"):
-                st.dataframe(dados.sort_index(ascending=False), use_container_width=True)
+            # --- BLOCO 4: NOTÍCIAS E DADOS BRUTOS ---
+            col_noticias, col_dados = st.columns([1, 1])
+
+            with col_noticias:
+                st.markdown("### 📰 ÚLTIMAS NOTÍCIAS")
+                if noticias_ticker:
+                    for item in noticias_ticker[:4]:
+                        titulo = item.get('title')
+                        link = item.get('link')
+                        publisher = item.get('publisher', 'Fonte Desconhecida')
+                        
+                        st.markdown(f"""
+                        <div class="news-card">
+                            <a href="{link}" target="_blank" class="news-title">{titulo}</a>
+                            <div class="news-publisher">Fonte: {publisher}</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                else:
+                    st.info("Nenhuma notícia recente encontrada para este ativo.")
+
+            with col_dados:
+                st.markdown("### 📋 DADOS HISTÓRICOS")
+                st.dataframe(dados.sort_index(ascending=False), use_container_width=True, height=280)
+
         else:
             st.error(f"Erro ao buscar '{ticker}'. Verifique a digitação do código do ativo.")
